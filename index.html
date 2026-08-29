@@ -7249,12 +7249,15 @@ function beginRecover(){
     const x=px+dx; return {x,y:gY(x)+0.03}; };
   getUpAnchors={ handL:anc("handL",0.34), handR:anc("handR",0.30),
                  footL:anc("footL",-0.32), footR:anc("footR",-0.38) };
-  recoverT=0; state=ST.RECOVER; stillTime=0; slowTime=0; contactAnchor=null; contactSet=null;
+  recoverT=0; state=ST.RECOVER; stillTime=0; slowTime=0; contactAnchor=null; contactSet=null; getUpOffX=0;
+  // The get-up owns its own root from here. Re-deriving it from the proxy every
+  // frame and then correcting it is what produced the reset-looking judder.
+  getUpRoot={x:model.position.x,y:model.position.y};
 }
 // ---------- fans + cannons ----------
 let cannonCur=null, cannonT=0;
 let getUpAnchors=null;
-let contactAnchor=null, contactSet=null;
+let contactAnchor=null, contactSet=null, getUpOffX=0, getUpRoot=null;
 function inFanColumn(f,x,y){
   // local coords: along the blow direction and across it
   const rx=x-f.def.x, ry=y-f.def.y;
@@ -7762,8 +7765,16 @@ function plantGetUp(t,contacts){
     const gy=g2?g2.y:gi.y;
     contactAnchor=new THREE.Vector3(here.x,gy+0.04,0);
   }
-  // the root is whatever keeps the planted limb on its spot
-  model.position.x+=contactAnchor.x-here.x;
+  // The root is whatever keeps the planted limb on its spot. Vertically that is
+  // applied straight away - that is the push. Horizontally it is eased and
+  // capped: the limbs swing hard through the pose, and following that exactly
+  // threw him a metre sideways in a single frame.
+  // The root now persists frame to frame, so this is a correction TOWARD the
+  // anchor, not an offset re-applied from scratch. Vertically it is taken in
+  // full - that is the push. Horizontally only a fraction, so a swinging arm
+  // nudges him instead of throwing him.
+  const errX=Math.max(-0.5,Math.min(0.5,contactAnchor.x-here.x));
+  model.position.x+=errX*0.12;
   model.position.y+=contactAnchor.y-here.y;
   model.updateMatrixWorld(true);
 
@@ -8250,9 +8261,18 @@ function frame(now){
       recoverT+=dt/CFG.recoverDur;
       const t=Math.min(1,recoverT);
       const contacts=applyGetUp(t);
-      placeRootFromProxy();
+      // continue from where the last frame left off, never from the proxy
+      if(getUpRoot) model.position.set(getUpRoot.x,getUpRoot.y,0);
       plantGetUp(t,contacts);
-      if(t>=1){ state=ST.STAND; standT=0; knockT=0; stillTime=0; consumePending(); }
+      if(getUpRoot){ getUpRoot.x=model.position.x; getUpRoot.y=model.position.y; }
+      // carry the proxy with him so the handover to standing is not a jump
+      if(proxy){
+        proxy.position.x=model.position.x;
+        proxy.position.y=model.position.y+CFG.proxyR+0.01;
+        proxy.velocity.set(0,0,0);
+        proxy.wakeUp();
+      }
+      if(t>=1){ state=ST.STAND; standT=0; knockT=0; stillTime=0; getUpRoot=null; consumePending(); }
     }
     else if(state===ST.STAND){
       if(pendingPress) consumePending();
